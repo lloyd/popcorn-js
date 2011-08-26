@@ -1,11 +1,15 @@
-
 PREFIX = .
 BUILD_DIR = ${PREFIX}/build
 DIST_DIR = ${PREFIX}/dist
 PLUGINS_DIR = ${PREFIX}/plugins
+PLUGINS_DIST_DIR = ${DIST_DIR}/plugins
 PARSERS_DIR = ${PREFIX}/parsers
+PARSERS_DIST_DIR = ${DIST_DIR}/parsers
 PLAYERS_DIR = ${PREFIX}/players
+PLAYERS_DIST_DIR = ${DIST_DIR}/players
 EFFECTS_DIR = $(PREFIX)/effects
+EFFECTS_DIST_DIR = $(DIST_DIR)/effects
+DIST_DIRS = ${DIST_DIR} ${PLUGINS_DIST_DIR} ${PARSERS_DIST_DIR} ${PLAYERS_DIST_DIR} ${EFFECTS_DIST_DIR}
 
 # Version number used in naming release files. Defaults to git commit sha.
 VERSION ?= $(shell git show -s --pretty=format:%h)
@@ -43,6 +47,9 @@ PLAYERS_MIN = ${DIST_DIR}/popcorn.players.min.js
 EFFECTS_DIST = $(DIST_DIR)/popcorn.effects.js
 EFFECTS_MIN = $(DIST_DIR)/popcorn.effects.min.js
 
+# json "manifest", used by configurator
+MANIFEST_DIST = $(DIST_DIR)/manifest.json
+
 # Grab all popcorn.<plugin-name>.js files from plugins dir
 PLUGINS_SRC := $(filter-out %unit.js, $(shell find ${PLUGINS_DIR} -name 'popcorn.*.js' -print))
 
@@ -54,6 +61,13 @@ PLAYERS_SRC := $(filter-out %unit.js, $(shell find ${PLAYERS_DIR} -name 'popcorn
 
 # Grab all popcorn.<effect-name>.js files from players dir
 EFFECTS_SRC := $(filter-out %unit.js, $(shell find $(EFFECTS_DIR) -name 'popcorn.*.js' -print))
+
+# INDividual files for all parsers, players, plugins, and effects.  By outputting
+# these, we allow for dynamic creation of a custom popcorn bundle
+PARSERS_IND_DIST := $(addprefix ${PARSERS_DIST_DIR}/, $(notdir ${PARSERS_SRC}))
+PLAYERS_IND_DIST := $(addprefix ${PLAYERS_DIST_DIR}/, $(notdir ${PLAYERS_SRC}))
+PLUGINS_IND_DIST := $(addprefix ${PLUGINS_DIST_DIR}/, $(notdir ${PLUGINS_SRC}))
+EFFECTS_IND_DIST := $(addprefix ${EFFECTS_DIST_DIR}/, $(notdir ${EFFECTS_SRC}))
 
 # Grab all popcorn.<player-name>.unit.js files from plugins dir
 PLUGINS_UNIT := $(shell find ${PLUGINS_DIR} -name 'popcorn.*.unit.js' -print)
@@ -82,13 +96,13 @@ add_license = cat ${PREFIX}/LICENSE_HEADER | sed -e 's/@VERSION/${VERSION}/' > $
 # Run the file through jslint
 run_lint = @@$(RHINO) build/jslint-check.js $(1)
 
-all: setup popcorn plugins parsers players effects complete min
+all: setup popcorn plugins parsers players effects complete min configurator
 	@@echo "Popcorn build complete.  To create a testing mirror, run: make testing."
 
 check: lint lint-plugins lint-parsers lint-players lint-effects
 
-${DIST_DIR}:
-	@@mkdir -p ${DIST_DIR}
+${DIST_DIRS}:
+	@@mkdir -p $@
 
 popcorn: ${POPCORN_DIST}
 
@@ -155,6 +169,43 @@ complete: update ${POPCORN_SRC} ${PARSERS_SRC} ${PLUGINS_SRC} ${PLAYERS_SRC} $(E
 	@@cat ${POPCORN_SRC} ${PLUGINS_SRC} ${PARSERS_SRC} ${PLAYERS_SRC} $(EFFECTS_SRC) > ${POPCORN_COMPLETE_DIST}.tmp
 	@@$(call add_license, ${POPCORN_COMPLETE_DIST}.tmp, ${POPCORN_COMPLETE_DIST})
 	@@rm ${POPCORN_COMPLETE_DIST}.tmp
+
+
+# The 'configurator' target outputs individual minified files along with a JSON manifest.
+# This distribution output is what the web based popcorn.js configurator uses as
+# input to dynamically assemble a custom library on the end user's browser
+${PARSERS_IND_DIST} : ${PARSERS_SRC}
+	@@echo "Building $@"
+	@@$(call compile, --js $(filter %$(notdir $@), ${PARSERS_SRC}), $@)
+
+${PLUGINS_IND_DIST} : ${PLUGINS_SRC}
+	@@echo "Building $@"
+	@@$(call compile, --js $(filter %$(notdir $@), ${PLUGINS_SRC}), $@)
+
+${PLAYERS_IND_DIST} : ${PLAYERS_SRC}
+	@@echo "Building $@"
+	@@$(call compile, --js $(filter %$(notdir $@), ${PLAYERS_SRC}), $@)
+
+${EFFECTS_IND_DIST} : ${EFFECTS_SRC}
+	@@echo "Building $@"
+	@@$(call compile, --js $(filter %$(notdir $@), ${EFFECTS_SRC}), $@)
+
+# Write the JSON manifest.json from a Makefile. 
+comma:= ,
+empty:=
+space:= $(empty) $(empty)
+json_array = $(subst $(space),$(comma),$(addprefix \", $(addsuffix \", $(notdir $(1)))))
+
+${MANIFEST_DIST}: ${EFFECTS_IND_DIST} ${PLAYERS_IND_DIST} ${PLUGINS_IND_DIST} ${PARSERS_IND_DIST}
+	@@echo "{" > ${MANIFEST_DIST}	
+	@@echo '  "plugins": [' $(call json_array, ${PLUGINS_IND_DIST}) '],'>> ${MANIFEST_DIST}	
+	@@echo '  "effects": [' $(call json_array, ${EFFECTS_IND_DIST}) '],'>> ${MANIFEST_DIST}	
+	@@echo '  "players": [' $(call json_array, ${PLAYERS_IND_DIST}) '],'>> ${MANIFEST_DIST}	
+	@@echo '  "parsers": [' $(call json_array, ${PARSERS_IND_DIST}) ']'>> ${MANIFEST_DIST}	
+	@@echo "}" >> ${MANIFEST_DIST}	
+
+configurator: update ${DIST_DIRS} ${PARSERS_IND_DIST} ${PLUGINS_IND_DIST} ${PLAYERS_IND_DIST} ${EFFECTS_IND_DIST} ${MANIFEST_DIST}
+	@@echo "Built individual files for configurator"
 
 lint:
 	@@echo "Checking Popcorn against JSLint..."
